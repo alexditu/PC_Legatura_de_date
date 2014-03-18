@@ -1,0 +1,233 @@
+Tema1 PC
+
+Nume: Ditu
+Prenume: Alexandru Mihai
+Serie: CA
+Grupa: 323
+
+Nota: 
+	Mentionez ca pentru niciun task nu am folosit o structura ajutatoare (in 
+genul my_pkt), ci am folosit direct memcpy ori de cate ori a fost nevoie, asa ca
+la inceputul fiecarui task (in explicatiile din README ma refer) am sa pun ce face fiecare variabila (doar cele care cred eu ca au nevoie de explicatii 
+suplimentare.
+	In plus, in loc de window_size am folosit DIM;
+
+Task 0:
+	Cum am implementat:
+		Mai intai am trimis 2 cadre de initializare: 
+			1 - cu nr de cadre pe care recv le va primi, pt a sti cand sa se
+				opreasca
+			2 - cu numele fisierului
+		Apoi, am trimis DIM cadre (ca sa umplu legatura de date) fara sa astept 
+	ack.
+		Dupa, primesc un ack, apoi mai citesc din fisier si mai trimit un pachet.
+		Totul se termina dupa ce au fost primite/trimise toate cadrele (adica
+no_frames cadre).
+
+
+Task 1 (GO BACK N):
+	Variabile:
+		msg_size = MSGSIZE - sizeof (int) -> reprezinta cati octeti din t.payload
+					sunt folositi pentru datele efective (adica cele citite din
+					fisier)
+		buffered_msg[DIM] = un vector in care salvez cadrele trimise (pentru 
+							situatia in care am nevoie sa retrimit fereastra,
+							atunci cand se pierde un pachet)
+		no_buffered = cate pachete au fost salvate, acesta creste de fiecare data
+						cand mai citesc si apoi salvez un pachet. 
+						vectorul il folosesc circular, pentru a simula glisarea
+						ferestrei sender-ului.
+		expected_ack = nr/ack-ul pe care astept sa il primesc
+		ack = ack-ul pe care il primesc
+
+	Cum am implementat:
+		Mai intai trimit 3 pachete de initializare (ce au numerele de ordine -1, 
+	-2. Nu au nicio importanta aceste numere de ordine, dar le-am folosit pentru
+	a fi sigur ca totul decurge cum trebuie). Cadrele contin urmatoarele informatii:
+		-1 : no_frames = nr total de cadre ce va fi trimis
+		-2 : filename = numele fisierului
+
+		Apoi trimit iar DIM cadre (incarc legatura de date), fara sa astept ack.
+		(tot ce am trimis este salvat in buffered_msg);
+		
+		Urmeaza un while (1) din care voi iesi cu un brake, in momentul in care
+	au fost receptionate/trimise toate cadrele.
+		(In sender folosesc recv_message_timeout, in recv nu).
+		Daca intra in timeout, inseamna ca s-a pierdut un cadru, si retrimit
+	toata fereastra, incepand cu ultimul pachet pentru care am primit ack (asta
+	inseamna ca merg circular prin buffered_msg, de la expected_ack % DIM, la DIM
+	si apoi de la 0 la expected_ack % DIM.
+		Altfel, sigur urmeaza un ack, si e ack-ul cel asteptat. Exista 2 situatii
+	(dpv al sender-ului):	
+		Fie ack == no_frames (deci au fost receptionate toate cadrele -> break;)
+		Fie nu, si retrimit un nou cadru, pe care il salvez si in buffer.
+		
+		In recv: astept mereu sa primesc cadre (nu folosesc timeout). Daca 
+	primesc cadrul pe care il asteptam, il scriu in fisier, si trimit ack cu
+	nr cadrului primit, altfel nu fac nimic, fortand sender-ul sa intre in 
+	timeout si sa retrimita o fereastra intreaga.
+
+	NOTA: nu am folosit NAk-uri !
+
+
+Task 2 (SELECTIVE REPEAT):
+	Variabile:
+		In sender:
+			flag[DIM] = un vector in care memorez starea mesajelor in buffer
+						daca flag[i] == -1, nu s-a primit ack pt acest mesaj
+		 				daca flag[i] == 1, s-a primit ack pt acest mesaj
+
+	Metoda de implementare:
+		Mai intai trimit 3 care de initializare, cu nr de ordine -1, -2, -3:
+		-1 : no_frames = cate cadre se vor trimite in total		
+		-2 : DIM = dimensiunea ferestrei (fereastra recv are aceeasti dimensiune
+					cu cea a sender-ului)
+		-3 : filename = numele fisierului
+
+		NOTA: aceste mesaje le retrimit pana sunt primite de recv !
+
+		Initializez toate flag-urile cu 1; 
+
+		In sender:
+			Daca folosesc recv_message_timeout; Daca e == -1, inseamna ca s-au
+		pierdut cadre, deci trebuie sa le retrimit pe cele care nu am confirmare
+		adica au flag-ul -1: le retrimit din buffer circular.
+			Daca primesc ack, si e cel asteptat, mai citesc din fisier, pun in
+		buffer si trimit noul cadru, iar in cazul in care mai am in continuare
+		cadre confirmate (inseamna ca este loc in fereastra), si cat timp am loc
+		(flag[i] == 1) mai citesc si trimit cadre noi. In cazul in care nu am 
+		primit ack-ul asteptat, atunci marchez in flag[] ca acel cadru a fost
+		receptionat, facand loc in fereastra pentru mai tarziu.
+			Totul se termina cand au fost trimise/receptionate toate cadrele 
+		(adica no_frames);
+
+		In recv:
+			Nu folosec recv_message_timeout si nici NAK. Recv trimite ack pt 
+		toate cadrele pe care le primeste (indiferent daca e cel pe care il
+		astepta sau nu), deci in cazul in care se pierd cadre, sender-ul nu
+		primeste toate ack-urile pe care le asteapta, si va intra in timeout,
+		retrimitand cadrele care s-au pierdut.
+			Recv are un buffer de dimensiunea ferestrei si un vecor flag[DIM],
+		care face exact acelasi lucru ca flag[] din sender.
+			Recv asteapta mereu sa primeasca alte cadre. Astfel pot sosi 2 feluri
+		de cadre:
+			1 - cadrul asteptat (expected_frame).
+				Daca este primit acest cadru, datele din el sunt scrise in 
+			fisierul de output, iar fereastra gliseaza la dreapta. In cazul in
+			care in falg[] mai sunt cadre primite le scriu si pe alea in fisier
+			(dar doar cat timp am o secventa de 1 continua, altfel nu), facand
+			loc cadrelor ce urmeaza. Nu trimit ack pt aceste cadre, deoarece pt
+			ele a fost trimis ack inainte.
+
+			2 - cadrul asteptat nu e expected_frame, atunci il salvez totusi, si
+			trimit ack pentru el. Cand se va ajunge in situatia 1 (mentionata mai
+			sus, atunci va fi scris si el in fisier).
+
+
+		Totul se termina cand primesc no_frames cadre.
+
+
+Task 3:
+	Foloseste acelasi protocol de la taskul 2 (cat si acelasi algoritm), numai
+ca in plus, se mai trimite un octet (o suma de control = checkSum). Pentru a
+calcula suma de control am folosit o functie ajutatoare: 
+char createCheckSum (msg t) {..}
+	octetul de control este calculat astfel:
+		bitul 0 din checkSum = suma (modulo 2) a tuturor bitilor de pe pozitia 0
+	din t.payload
+		bitul 1 din checkSum = suma (modulo 2) a tuturor bitilor de pe pozitia 1
+	din t.payload 
+	........................
+		bitul i din checkSum = suma (modulo 2) a tuturor bitilor de pe pozitia i
+	din t.payload
+
+	De exemplu:
+		Sa presupunem ca in payload am 2 octeti de date:
+		00001111 11111111
+		atunci:
+			00001111
+			11111111 +
+		   -----------
+checkSum =  11110000
+
+	Structura t.payload:
+		1395 octeti de date (octetii cititi din fisier)
+		4 octeti pt nr de ordine
+		1 octet suma de control.
+	
+	Suma de control o pun la sfarsit, si este calculata pentru primii 1399 de 
+octeti, aica si pentru nr de ordine.
+
+	Inainte sa trimit orice pachet, ii calculez suma de control, si o pun in 
+payload.
+	Recv creeaza din nou suma de control si o compara cu cea primita. Daca sunt
+la fel, atunci e ok, daca difera nu face nimic, se comporta ca si cum pachetul
+s-a pierdut. Restul e ca in taskul 2;
+
+
+Task 4:
+	Folosesc acelasi algoritm (si protocol ) ca la taskul 2. Diferenta este ca
+orice mesaj trimit are in plus niste biti (sunt bitii de paritate din codul 
+hamming).
+	Folosesc niste functii ajutatoare: msg createHam (msg t) si msg getCodeFromHam (msg t)
+
+	createHam = creeaza codul hamming pt mesajul trimis ca parametru.
+	mesajul trimis ca parametru, t, are urmatoarea structura:
+	t.len = lungimea datelor din t.payload (cati octeti am citit din fisier) + 4
+			(4 octeti pt nr de ordine)
+	t.payload = t.len octeti de date + 4 octeti pt nr de ordine.
+
+	pe aceste date fac hamming, astfel:
+
+		toti octetii din t.payload ii privesc ca si cum ar fi unul sub altul, si 
+	aplic hamming de 8 ori, pt: toti bitii de pe pozitia 0 din fiecare octet,
+	pt toti bitii de pe pozitia 1 din fiecare octet, etc.
+		Codul hamming obtinut este scris in alta variabila h, de tipul msg, in
+	care h.len = t.len + nr_biti_de_paritate_adaugati.
+		Intorc h;
+
+	getMsgFromHam = face operatia inversa: scoate din mesajul in care am adaugat
+				bitii de paritate mesajul initial, pentru a putea fi prelucrat.
+
+	Aceasta functie este folosita de recv.
+
+	In plus in recv, mai am inca o functie, correctHam, ce corecteaza mesajul
+primit de la sender. Apoi apeleaza getMsgFromHam, afla care era msg-ul initial,
+si scrie in fisier ce are de scris.
+
+	Atfel, desi sunt corupte toate mesajele, fiind corectate in prealabil de recv,
+eficienta este de 100%, deci merge repede.
+
+
+
+
+
+
+
+
+		
+		
+	
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+		
+
